@@ -1,0 +1,81 @@
+---
+title: "Machine_Learniong_Project"
+author: "Hayk Grigoryan"
+date: "April 16, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Identifying how subject performed heavylifting 
+
+The aim of this project is to identify the heavylifting type (one correct and four incorrect) by using the gyroscopic data from several gadgets attached on the subjects. 
+The data is downloaded via [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv] (Weight Lifting Exercise Database)
+
+We used two machine learning algorithms. Linear model - linear discriminant analysis, and non-linear random forests.
+Non linear model performed much better with an 99.86% in-sample accuracy and has been chosen as the go-go model.
+
+Since random forests require extensive computing power along with conventional libraries to perform data cleaning, tyding, and modeling we called also two libraries for parallel computing.
+
+```{r libraries}
+library(tidyverse)
+library(caret)
+library(corrplot)
+library(parallel)
+library(doParallel)
+```
+
+The data is already downloaded into training and test sets. Training sets comprises of 19622 raws and 160 variables, whereas the train set is 20 records without specifying the classe variable, which is our classifier.
+```{r reading_data}
+train <- read_csv("./train.csv")
+test <- read_csv("./test.csv")
+```
+
+Upon closer look at the variables we notice there are some with variable new_window = "yes", which does not exist with such value  in test set. Hence we decided to remove those extra records.
+
+Additionally there were some variables with all NULL records and no variability. nearZeroVar function in cartet package is good to identify those without any variance to be removed from further analysis.
+
+Since the data should be may stay immune to subject and time the record was taken those variables associated with subject and time were also removed.
+```{r cleaning}
+train <- train %>% filter(new_window == "no") 
+ZeroVar <- nearZeroVar(train)
+train <- train %>% dplyr::select(-ZeroVar) %>% dplyr::select(num_window:classe) %>% na.omit()
+classe <- as.factor(train$classe) #Classifer
+train <- train %>% dplyr::select(-classe)
+test <- test %>% dplyr::select(-ZeroVar) %>% dplyr::select(num_window:magnet_forearm_z)
+```
+
+It is interesting to see how remaining variables relate to each other and correlation plot indicates some clustering among the recordings of each gadget, but overall there is no substantial irregular clustering of correlations.
+```{r plotting}
+correlations <- cor(train)
+corrplot(correlations, order = "hclust")
+```
+
+The first apparent model to use will be the linear discriminant analysis which is robust and works well if the underlying reletionship is linear. Cross valoidation with 10 subsets seemed to be reasonable. Additionally variables are scaled and centered before feeding into the model.
+```{r lda_model}
+ctrl <- trainControl(method = "cv", number = 10)
+modelFit <- train(train, classe, method = "lda", preProcess = c("scale", "center"),  
+                  trControl = ctrl)
+confusionMatrix(modelFit)
+```
+
+The results are somewhat disappointing with only 72% accuracy rates and we jump into more complex random forest model as ana alternative.
+We use the same cross validation method to identify better the tuning parameter. But before that we allocate parallel computer resourses to increase the time of the analysis, which takes minutes on my 4 core i7 16 GM RAM computer.
+```{r random_forest_model}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+modelFit_rf <- train(train, classe, method = "rf", trControl = fitControl)
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+This time the accuracy rate is 99.87% which provides me a good chance to correctly identify all 20 test examples unless my model is overfitting.
+```{r testing}
+confusionMatrix(modelFit_rf)
+test_results <- predict(modelFit_rf, test)
+```
